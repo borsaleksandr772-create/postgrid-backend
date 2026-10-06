@@ -23,9 +23,7 @@ export function validateTargets(targets,now=Date.now()){
       requireValue(typeof t.options?.madeForKids==='boolean','youtube_audience');
     }
     if(t.platform==='tiktok'){
-      requireValue(t.options?.consent===true&&typeof t.options?.privacy==='string','tiktok_consent_privacy');
-      requireValue(!t.options.branded||t.options.privacy!=='SELF_ONLY','branded_not_private');
-      requireValue(!t.options.commercial||t.options.ownBrand||t.options.branded,'commercial_disclosure');
+      requireValue(t.options?.consent===true,'tiktok_consent_privacy');
     }
   }
   return targets;

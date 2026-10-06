@@ -1,4 +1,4 @@
-import { bearer, jsonPost, remote, igBase, creatorInfo, validateTikTok, accessToken } from './providers.js';
+import { bearer, jsonPost, remote, igBase, canUploadTikTok, accessToken } from './providers.js';
 import { seal, unseal, requireValue, Problem } from './security.js';
 
 async function mediaURL(env,upload){
@@ -18,12 +18,12 @@ export async function publishStep(env,db,j,a,u,token){
  }
  if(p==='tiktok'){
    if(!s.publish_id){
-     const info=await creatorInfo(token);validateTikTok(j,info,u.duration);
-     const o=j.options;
-     const v=await remote('https://open.tiktokapis.com/v2/post/publish/video/init/',jsonPost(token,{post_info:{title:j.description,privacy_level:o.privacy,disable_comment:!o.comment,disable_duet:!o.duet,disable_stitch:!o.stitch,brand_content_toggle:!!o.branded,brand_organic_toggle:!!o.ownBrand,is_aigc:!!o.ai},source_info:{source:'PULL_FROM_URL',video_url:await mediaURL(env,u)}}));
-     requireValue(v.data?.publish_id,'publish_id_missing',502);return progress({publish_id:v.data.publish_id},30);
+     requireValue(await canUploadTikTok(env,a),'tiktok_reconnect_upload',409);
+     const v=await remote('https://open.tiktokapis.com/v2/post/publish/inbox/video/init/',jsonPost(token,{source_info:{source:'PULL_FROM_URL',video_url:await mediaURL(env,u)}}));
+     requireValue(v.data?.publish_id,'publish_id_missing',502);return progress({publish_id:v.data.publish_id,delivery:'inbox'},30);
    }
    const v=await remote('https://open.tiktokapis.com/v2/post/publish/status/fetch/',jsonPost(token,{publish_id:s.publish_id}));
+   if(v.data?.status==='SEND_TO_USER_INBOX')return {status:'needs_attention',step:s,error:'tiktok_inbox_ready',external_id:s.publish_id};
    if(v.data?.status==='PUBLISH_COMPLETE')return done(v.data.publicaly_available_post_id?.[0]||s.publish_id);
    if(v.data?.status==='FAILED')throw new Problem('tiktok_processing_failed');
    return progress(s,30);

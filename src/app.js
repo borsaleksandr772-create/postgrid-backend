@@ -1,6 +1,6 @@
 import {database} from './db.js';
 import {random,hash,seal,unseal,Problem,requireValue,uuid,validateTargets} from './security.js';
-import {platforms,provider,authorizeURL,exchange,revoke,accessToken,creatorInfo,validateTikTok} from './providers.js';
+import {platforms,provider,authorizeURL,exchange,revoke,accessToken,creatorInfo,canUploadTikTok} from './providers.js';
 import {runQueue} from './publish.js';
 const response=(value,status=200)=>new Response(JSON.stringify(value),{status,headers:{'Content-Type':'application/json; charset=utf-8'}});
 async function body(req){requireValue((req.headers.get('content-type')||'').startsWith('application/json'),'json_required',415);const s=await req.text();requireValue(s.length<=65536,'body_too_large',413);try{return JSON.parse(s);}catch{throw new Problem('invalid_json');}}
@@ -43,6 +43,8 @@ export async function route(req,env,db=database(env)){
  const user=await db.user(token);requireValue(uuid(user.id),'invalid_user',401);
  if(path==='/api/accounts'&&method==='GET'){
    const rows=await db.rows('accounts',`user_id=eq.${user.id}&select=id,platform,remote_id,display_name,expires_at,connected`);
+   const tt=rows.find(a=>a.platform==='tiktok'&&a.connected);
+   if(tt){const [full]=await db.rows('accounts',`id=eq.${tt.id}&user_id=eq.${user.id}`);tt.upload_ready=await canUploadTikTok(env,full);}
    return response({accounts:platforms.map(p=>({...rows.find(a=>a.platform===p),platform:p,configured:!!(provider(env,p).id&&provider(env,p).secret)})),publishing:env.PUBLISH_ENABLED==='true'});
  }
  const start=/^\/api\/oauth\/(instagram|tiktok|youtube|x)\/start$/.exec(path);
@@ -94,7 +96,8 @@ export async function route(req,env,db=database(env)){
    const head=new Uint8Array(await video.arrayBuffer());
    requireValue(total===u.size&&new TextDecoder().decode(head.slice(4,8))==='ftyp','invalid_mp4_or_upload_incomplete');
    for(const t of b.targets)if(t.platform==='tiktok'){
-     const [a]=await db.rows('accounts',`user_id=eq.${user.id}&platform=eq.tiktok`);validateTikTok(t,await creatorInfo(await accessToken(env,db,a)),u.duration);
+     const [a]=await db.rows('accounts',`user_id=eq.${user.id}&platform=eq.tiktok`);requireValue(await canUploadTikTok(env,a),'tiktok_reconnect_upload',409);
+     t.options={consent:true,delivery:'inbox'};
    }
    const id=await db.rpc('enqueue_post',{p_id:b.id,p_user:user.id,p_upload:b.upload_id,p_name:b.name,p_targets:b.targets});
    return response({id},201);
@@ -118,7 +121,8 @@ export async function route(req,env,db=database(env)){
    if(job.platform==='tiktok'){
      requireValue(b.consent===true,'tiktok_consent_privacy');
      const [a]=await db.rows('accounts',`id=eq.${job.account_id}&user_id=eq.${user.id}`);
-     validateTikTok(target,await creatorInfo(await accessToken(env,db,a)),upload.duration);
+     requireValue(await canUploadTikTok(env,a),'tiktok_reconnect_upload',409);
+     target.options={consent:true,delivery:'inbox'};
    }
    // The status condition is checked atomically by PostgreSQL, including after a worker row lock.
    const saved=await db.patch('jobs',`id=eq.${id}&user_id=eq.${user.id}&status=eq.scheduled`,{scheduled_at:target.scheduled_at,next_run:target.scheduled_at,description:target.description,title:target.title,options:target.options});

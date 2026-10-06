@@ -3,7 +3,7 @@ export const platforms=['instagram','tiktok','youtube','x'];
 export function provider(env,p){
  const definitions={
   instagram:{prefix:'INSTAGRAM',authorize:'https://www.instagram.com/oauth/authorize',token:'https://api.instagram.com/oauth/access_token',scope:'instagram_business_basic,instagram_business_content_publish'},
-  tiktok:{prefix:'TIKTOK',authorize:'https://www.tiktok.com/v2/auth/authorize/',token:'https://open.tiktokapis.com/v2/oauth/token/',scope:'user.info.basic,video.publish'},
+  tiktok:{prefix:'TIKTOK',authorize:'https://www.tiktok.com/v2/auth/authorize/',token:'https://open.tiktokapis.com/v2/oauth/token/',scope:'user.info.basic,video.upload'},
   youtube:{prefix:'GOOGLE',authorize:'https://accounts.google.com/o/oauth2/v2/auth',token:'https://oauth2.googleapis.com/token',scope:'https://www.googleapis.com/auth/youtube.upload https://www.googleapis.com/auth/youtube.readonly'},
   x:{prefix:'X',authorize:'https://x.com/i/oauth2/authorize',token:'https://api.x.com/2/oauth2/token',scope:'tweet.read tweet.write users.read media.write offline.access'}
  };
@@ -22,7 +22,12 @@ export function authorizeURL(env,p,state,challenge){
 export async function remote(url,options={}){
  let r;try{r=await fetch(url,{...options,signal:AbortSignal.timeout(25000)});}catch{throw new Problem('provider_network_ambiguous',502);}
  let j={};const text=await r.text();try{j=text?JSON.parse(text):{};}catch{throw new Problem('provider_response_invalid',502);}
- if(!r.ok||j.error&&(typeof j.error!=='object'||j.error.code&&j.error.code!=='ok')||j.errors?.length)throw new Problem('provider_http_'+r.status,502);
+ if(!r.ok||j.error&&(typeof j.error!=='object'||j.error.code&&j.error.code!=='ok')||j.errors?.length){
+   // Expose only documented fixed codes, never provider messages or token-bearing bodies.
+   const tiktokErrors=new Set(['unaudited_client_can_only_post_to_private_accounts','url_ownership_unverified','scope_not_authorized','access_token_invalid','spam_risk_too_many_posts','spam_risk_too_many_pending_share','spam_risk_user_banned_from_posting','reached_active_user_cap','rate_limit_exceeded']);
+   if(new URL(url).hostname==='open.tiktokapis.com'&&tiktokErrors.has(j.error?.code))throw new Problem('tiktok_'+j.error.code,502);
+   throw new Problem('provider_http_'+r.status,502);
+ }
  return j;
 }
 export const bearer=t=>({Authorization:'Bearer '+t});
@@ -83,6 +88,11 @@ export async function revoke(env,p,t,remoteId){
  return remote(igBase(env)+'/'+encodeURIComponent(remoteId)+'/permissions',{method:'DELETE',headers:bearer(t.access_token)});
 }
 export async function creatorInfo(token){return (await remote('https://open.tiktokapis.com/v2/post/publish/creator_info/query/',jsonPost(token,{}))).data;}
+export async function canUploadTikTok(env,a){
+ if(!a?.connected)return false;
+ const t=await unseal(env,a.tokens,a.user_id+':tiktok');
+ return typeof t.scope==='string'&&t.scope.split(/[ ,]+/).includes('video.upload');
+}
 export function validateTikTok(t,info,duration){
  requireValue(info?.privacy_level_options?.includes(t.options.privacy),'tiktok_privacy_changed');
  requireValue(duration<=info.max_video_post_duration_sec,'tiktok_video_too_long');
