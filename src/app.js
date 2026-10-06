@@ -99,7 +99,31 @@ export async function route(req,env,db=database(env)){
    const id=await db.rpc('enqueue_post',{p_id:b.id,p_user:user.id,p_upload:b.upload_id,p_name:b.name,p_targets:b.targets});
    return response({id},201);
  }
- if(path==='/api/jobs'&&method==='GET')return response({jobs:await db.rows('jobs',`user_id=eq.${user.id}&select=id,post_id,platform,scheduled_at,description,title,status,external_id,error,posts(name)&order=scheduled_at.desc&limit=500`)});
+ if(path==='/api/jobs'&&method==='GET')return response({jobs:await db.rows('jobs',`user_id=eq.${user.id}&select=id,post_id,platform,scheduled_at,description,title,options,status,external_id,error,posts(name)&order=scheduled_at.asc&limit=500`)});
+ const jobAction=/^\/api\/jobs\/([\w-]+)\/(edit|preview)$/.exec(path);
+ if(jobAction&&method==='POST'){
+   const id=jobAction[1];requireValue(uuid(id),'invalid_id');
+   const [job]=await db.rows('jobs',`id=eq.${id}&user_id=eq.${user.id}`);requireValue(job,'job_not_found',404);
+   const [post]=await db.rows('posts',`id=eq.${job.post_id}&user_id=eq.${user.id}`);requireValue(post,'post_not_found',404);
+   const [upload]=await db.rows('uploads',`id=eq.${post.upload_id}&user_id=eq.${user.id}`);requireValue(upload,'upload_not_found',404);
+   if(jobAction[2]==='preview'){
+     const signed=await db.storage('object/sign/videos/'+upload.path,{expiresIn:900});
+     requireValue(typeof signed.signedURL==='string'&&signed.signedURL.startsWith('/object/sign/'),'preview_unavailable',502);
+     return response({url:env.SUPABASE_URL+'/storage/v1'+signed.signedURL,expires_at:Date.now()+900000});
+   }
+   requireValue(job.status==='scheduled','job_already_started',409);
+   const b=await body(req),target={platform:job.platform,scheduled_at:b.scheduled_at,description:b.description,title:b.title??job.title,options:job.options};
+   if(job.platform==='youtube')target.options={...job.options,privacy:b.privacy??job.options.privacy};
+   validateTargets([target]);
+   if(job.platform==='tiktok'){
+     requireValue(b.consent===true,'tiktok_consent_privacy');
+     const [a]=await db.rows('accounts',`id=eq.${job.account_id}&user_id=eq.${user.id}`);
+     validateTikTok(target,await creatorInfo(await accessToken(env,db,a)),upload.duration);
+   }
+   // The status condition is checked atomically by PostgreSQL, including after a worker row lock.
+   const saved=await db.patch('jobs',`id=eq.${id}&user_id=eq.${user.id}&status=eq.scheduled`,{scheduled_at:target.scheduled_at,next_run:target.scheduled_at,description:target.description,title:target.title,options:target.options});
+   requireValue(saved.length===1,'job_already_started',409);return response({saved:true});
+ }
  const cancel=/^\/api\/jobs\/([\w-]+)\/cancel$/.exec(path);
  if(cancel&&method==='POST'){
    requireValue(uuid(cancel[1]),'invalid_id');const rows=await db.patch('jobs',`id=eq.${cancel[1]}&user_id=eq.${user.id}&status=in.(scheduled,processing)`,{status:'cancelled'});
