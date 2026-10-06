@@ -1,0 +1,6 @@
+name = "postgrid-api"
+main = "src/worker.js"
+compatibility_date = "2026-10-01"
+[triggers]
+crons = ["* * * * *"]
+# Set values via wrangler secret bulk .env (see README).
